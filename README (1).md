@@ -139,8 +139,6 @@ chmod --no-preserve-root 754 WelcomeFile  # owner rwx, group r-x, others r--
 cd / && pwd && ls -1                    # back to root, list contents
 ```
 
-> Screenshot for this task is still to be added.
-
 <!-- Add the Task 7 screenshot here once captured, for example: ![Bash commands](screenshots/07b-bash-commands.png) -->
 
 ### Task 8: Install and Verify Apache
