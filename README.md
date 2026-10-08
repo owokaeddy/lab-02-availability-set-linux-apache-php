@@ -183,3 +183,64 @@ PHP 8.1.34 installed, and the package search confirmed the Curl module (`php-cur
 ## Security Note
 
 The SSH private key generated for the VM is intentionally **not** included in this repository.
+
+## Part 2: Rebuilding the Lab with Terraform (Infrastructure as Code)
+
+After completing the lab by hand in the portal, I rebuilt the same environment as code with Terraform. The goal was to make it repeatable: one command builds everything, and one command removes it.
+
+### What the code builds
+
+| File | What it defines |
+|---|---|
+| `providers.tf` | The Azure provider (`azurerm ~> 4.0`) and the required Terraform version |
+| `main.tf` | Shared tags (`locals`), resource group, proximity placement group, availability set (3 fault domains, 8 update domains) |
+| `network.tf` | Virtual network (`10.0.0.0/14`), workload subnet, `AzureBastionSubnet` (`/26`), Bastion public IP and host, NSG with HTTP (80) and HTTPS (443) rules, network interface, NSG association, and the Ubuntu 24.04 Linux VM in the availability set |
+
+Terraform managed **13 resources** (the resource group, 2 subnets, and the NSG association are part of that count). The portal lists 9 items in the resource group, including the VM's OS disk, which Azure creates automatically.
+
+### How I worked
+
+1. Wrote the configuration in stages and ran `terraform init`, `fmt`, `validate`, and `plan` at each stage, predicting the plan before running it.
+2. Used `locals` for the tags, so changing one value updated all resources in a single plan (3 to change). I reverted it without applying.
+3. Used references like `azurerm_resource_group.rg.name` instead of retyping values, so Terraform worked out the build order on its own.
+4. Applied everything, connected to the VM through Azure Bastion with an SSH key, verified it, and ran `terraform destroy` to stop billing.
+
+### Troubleshooting log: issues I hit and how I fixed them
+
+
+| 1 | Subnet reference failed | `Invalid reference` | The pointer stopped at `azurerm_virtual_network` with no name or attribute | Wrote the full reference: `azurerm_virtual_network.vnet.name` |
+| 2 | Public IP rejected | `expected allocation_method to be one of ["Static" "Dynamic"], got static` | The values are case-sensitive | Changed to `"Static"` and `"Standard"` |
+| 3 | NSG rule would not parse | (syntax error on the rule) | A mismatched quote: `"Allow'` | Used matching double quotes |
+| 4 | First `apply` failed on the NIC | `Subnet with name 'AzureBastionSubnet' can be used only for the Azure Bastion resource` | The NIC pointed at the Bastion subnet instead of the workload subnet | Changed `subnet_id` to `azurerm_subnet.workload.id` and re-ran `apply` |
+
+**What I learned from them**
+
+- Terraform error messages usually say what is wrong and what the allowed values are, so read the last lines first.
+- `terraform validate` and `terraform plan` catch most mistakes before anything is built, which is why I ran them before every apply.
+- A failed apply is not a restart. Terraform keeps track of what it already created, so after fixing issue 7 the second apply only built the 3 missing resources.
+- Azure has its own rules on top of Terraform, such as `AzureBastionSubnet` being reserved. The error came from Azure, not from my syntax.
+
+### Design choices
+
+- **No public SSH.** The portal version of the lab opened port 22 to the internet. In Terraform, the VM has no public IP and is reached only through Bastion.
+- **SSH key outside the repo.** The key pair lives in `~/.ssh` and Terraform reads only the public key. The private key is never committed.
+- **State and sensitive files ignored.** `.gitignore` excludes `.terraform/`, `*.tfstate`, and `*.tfvars`. The `.terraform.lock.hcl` file is committed to pin the provider version.
+- **Subscription ID kept out of code.** It is supplied through the `ARM_SUBSCRIPTION_ID` environment variable.
+
+### Evidence
+
+Resources created by Terraform in the resource group:
+
+![Resource group built by Terraform](screenshots/tf-02-resource-group.png)
+
+Apply result:
+
+![Terraform apply complete](screenshots/tf-03-apply-complete.png)
+
+SSH session on the Terraform-built VM through Azure Bastion, showing Ubuntu 24.04:
+
+![Bastion session](screenshots/tf-01-bastion-session.png)
+
+### Cleanup
+
+Everything was removed with `terraform destroy` after testing, since Bastion and the VM bill by the hour. The code stays in this repo, so the environment can be rebuilt with `terraform init` and `terraform apply`.
